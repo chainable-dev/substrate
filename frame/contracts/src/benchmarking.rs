@@ -771,7 +771,6 @@ benchmarks! {
 				},
 			],
 			call_body: Some(body_counted(r * API_BENCHMARK_BATCH_SIZE, vec![
-				// call set_storage at key_ptr
 				Counter(0, key_len as u32), // key_ptr
 				Regular(Instruction::I32Const(0)), // value_ptr
 				Regular(Instruction::I32Const(0)), // value_len
@@ -801,7 +800,6 @@ benchmarks! {
 				},
 			],
 			call_body: Some(body_repeated(API_BENCHMARK_BATCH_SIZE, &[
-				// call set_storage at key_ptr
 				Instruction::I32Const(0), // key_ptr
 				Instruction::I32Const(0), // value_ptr
 				Instruction::I32Const((n * 1024) as i32), // value_len
@@ -812,7 +810,6 @@ benchmarks! {
 		let instance = instantiate_contract::<T>(code, vec![])?;
 		let origin = RawOrigin::Signed(instance.caller.clone());
 	}: call(origin, instance.addr, 0.into(), Weight::max_value(), vec![])
-
 
 	// Similar to seal_set_storage. However, we store all the keys that we are about to
 	// delete beforehand in order to prevent any optimizations that could occur when
@@ -855,8 +852,6 @@ benchmarks! {
 			)
 			.map_err(|_| "Failed to write to storage during setup.")?;
 		}
-		#[cfg(not(test))]
-		frame_benchmarking::benchmarking::commit_db();
 		let origin = RawOrigin::Signed(instance.caller.clone());
 	}: call(origin, instance.addr, 0.into(), Weight::max_value(), vec![])
 
@@ -902,8 +897,6 @@ benchmarks! {
 			)
 			.map_err(|_| "Failed to write to storage during setup.")?;
 		}
-		#[cfg(not(test))]
-		frame_benchmarking::benchmarking::commit_db();
 		let origin = RawOrigin::Signed(instance.caller.clone());
 	}: call(origin, instance.addr, 0.into(), Weight::max_value(), vec![])
 
@@ -930,7 +923,7 @@ benchmarks! {
 				Instruction::I32Const(T::MaxValueSize::get() as i32), // value
 				Instruction::I32Store(2, 0),
 
-				// call set_storage at key_ptr
+				// call at key_ptr
 				Instruction::I32Const(0), // key_ptr
 				Instruction::I32Const((key_len + 4) as i32), // out_ptr
 				Instruction::I32Const(key_len as i32), // out_len_ptr
@@ -948,10 +941,58 @@ benchmarks! {
 			Some(vec![42u8; (n * 1024) as usize])
 		)
 		.map_err(|_| "Failed to write to storage during setup.")?;
-		#[cfg(not(test))]
-		frame_benchmarking::benchmarking::commit_db();
 		let origin = RawOrigin::Signed(instance.caller.clone());
 	}: call(origin, instance.addr, 0.into(), Weight::max_value(), vec![])
+
+	seal_transfer {
+		let r in 0 .. API_BENCHMARK_BATCHES;
+		let accounts = (0..r * API_BENCHMARK_BATCH_SIZE)
+			.map(|i| account::<T::AccountId>("receiver", i, 0))
+			.collect::<Vec<_>>();
+		let account_len = accounts.get(0).map(|i| i.encode().len()).unwrap_or(0);
+		let account_bytes = accounts.iter().flat_map(|x| x.encode()).collect();
+		let value = Config::<T>::subsistence_threshold_uncached();
+		let value_bytes = value.encode();
+		let value_len = value_bytes.len();
+		use CountedInstruction::{Counter, Regular};
+		let code = create_code::<T>(ModuleDefinition {
+			memory: Some(ImportedMemory::max::<T>()),
+			imported_functions: vec![ImportedFunction {
+				name: "seal_transfer",
+				params: vec![ValueType::I32, ValueType::I32, ValueType::I32, ValueType::I32],
+				return_type: Some(ValueType::I32),
+			}],
+			data_segments: vec![
+				DataSegment {
+					offset: 0,
+					value: value_bytes,
+				},
+				DataSegment {
+					offset: value_len as u32,
+					value: account_bytes,
+				},
+			],
+			call_body: Some(body_counted(r * API_BENCHMARK_BATCH_SIZE, vec![
+				Counter(value_len as u32, account_len as u32), // account_ptr
+				Regular(Instruction::I32Const(account_len as i32)), // account_len
+				Regular(Instruction::I32Const(0)), // value_ptr
+				Regular(Instruction::I32Const(value_len as i32)), // value_len
+				Regular(Instruction::Call(0)),
+				Regular(Instruction::Drop),
+			])),
+			.. Default::default()
+		});
+		let instance = instantiate_contract::<T>(code, vec![])?;
+		let origin = RawOrigin::Signed(instance.caller.clone());
+		for account in &accounts {
+			assert_eq!(T::Currency::total_balance(account), 0.into());
+		}
+		}: call(origin, instance.addr, 0.into(), Weight::max_value(), vec![])
+	verify {
+		for account in &accounts {
+			assert_eq!(T::Currency::total_balance(account), value);
+		}
+	}
 
 	// Only the overhead of calling the function itself with minimal arguments.
 	seal_hash_sha2_256 {
@@ -1072,6 +1113,7 @@ mod tests {
 	create_test!(seal_set_storage_per_kb);
 	create_test!(seal_get_storage);
 	create_test!(seal_get_storage_per_kb);
+	create_test!(seal_transfer);
 	create_test!(seal_clear_storage);
 	create_test!(seal_hash_sha2_256);
 	create_test!(seal_hash_sha2_256_per_kb);
