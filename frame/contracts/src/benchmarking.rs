@@ -686,8 +686,12 @@ benchmarks! {
 	seal_deposit_event_per_topic_and_kb {
 		let t in 0 .. Contracts::<T>::current_schedule().max_event_topics;
 		let n in 0 .. T::MaxValueSize::get() / 1024;
-		let topics = (0 .. t).map(|n| T::Hashing::hash_of(&n)).collect::<Vec<_>>().encode();
-		let topics_len = topics.len();
+		let mut topics = (0..API_BENCHMARK_BATCH_SIZE)
+			.map(|n| (n * t..n * t + t).map(|i| T::Hashing::hash_of(&i)).collect::<Vec<_>>().encode())
+			.peekable();
+		let topics_len = topics.peek().map(|i| i.len()).unwrap_or(0);
+		let topics = topics.flatten().collect();
+		use CountedInstruction::{Counter, Regular};
 		let code = create_code::<T>(ModuleDefinition {
 			memory: Some(ImportedMemory::max::<T>()),
 			imported_functions: vec![ImportedFunction {
@@ -701,13 +705,12 @@ benchmarks! {
 					value: topics,
 				},
 			],
-			call_body: Some(body(vec![
-				Instruction::I32Const(0), // topics_ptr
-				Instruction::I32Const(topics_len as i32), // topics_len
-				Instruction::I32Const(0), // data_ptr
-				Instruction::I32Const((n * 1024) as i32), // data_len
-				Instruction::Call(0),
-				Instruction::End,
+			call_body: Some(body_counted(API_BENCHMARK_BATCH_SIZE, vec![
+				Counter(0, topics_len as u32), // topics_ptr
+				Regular(Instruction::I32Const(topics_len as i32)), // topics_len
+				Regular(Instruction::I32Const(0)), // data_ptr
+				Regular(Instruction::I32Const((n * 1024) as i32)), // data_len
+				Regular(Instruction::Call(0)),
 			])),
 			.. Default::default()
 		});
